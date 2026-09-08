@@ -4,11 +4,13 @@ import base64
 import json
 import asyncio
 import warnings
+from datetime import datetime
 import pandas as pd
 from tencentcloud.common import credential
 from tencentcloud.common.profile.client_profile import ClientProfile
 from tencentcloud.common.profile.http_profile import HttpProfile
 from tencentcloud.ocr.v20181119 import ocr_client, models
+from tencentcloud.common.exception.tencent_cloud_sdk_exception import TencentCloudSDKException
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -53,14 +55,23 @@ async def async_ocr_request(image_path, secret_id, secret_key):
     """
     异步并发 OCR 核心，带严格 QPS 限流控制
     """
-    async with qps_semaphore:  # 强制限制并发数，防止触发 10QPS 限制闪退
+    async with qps_semaphore:  
         try:
-            # 腾讯云 SDK 默认同步阻断，我们使用线程池将其包裹为非阻塞异步调用
             loop = asyncio.get_event_loop()
             return await loop.run_in_executor(None, _sync_tencent_ocr, image_path, secret_id, secret_key)
+        except TencentCloudSDKException as err:
+            # AuthFailure.SecretIdNotFound 这个异常是做测试用的，实际上应该是：ResourceUnavailable.ResourcePackageRunOut
+            exhausted_codes = [
+                "LimitExceeded", 
+                "ResourceInsufficient", 
+                "AuthFailure.SecretIdNotFound",
+                "ResourceUnavailable.ResourcePackageRunOut"
+            ]
+            if err.code in exhausted_codes or any(k in err.message for k in ["停机", "欠费", "次数", "耗尽", "余额不足"]):
+                raise ValueError("ACCOUNT_EXHAUSTED")
+            raise err
         except Exception as e:
-            print(f"【异步网络异常】图片 {os.path.basename(image_path)} 发送失败: {str(e)}")
-            return []
+            raise e
 
 def _sync_tencent_ocr(image_path, secret_id, secret_key):
     """底层被包装的腾讯云物理调用"""
@@ -89,7 +100,7 @@ def _sync_tencent_ocr(image_path, secret_id, secret_key):
     return image_results
 
 def clean_and_parse_ocr(img_name, img_list):
-    """保持您原汁原味的账单深度解析逻辑，无缝承接云端数据"""
+    """深度解析逻辑"""
     texts = []
     scores = []
     for item in img_list:
@@ -106,31 +117,23 @@ def clean_and_parse_ocr(img_name, img_list):
             res_map["付款金额"] = (t, scores[i])
             break
             
-        # =====================================================================
-    # ✨ 核心重构：收款官方双轨制精准提取 ＆ 基础数据深度解析
-    # =====================================================================
-    
-    # 1. 首先全局定位【付款金额】的位置（作为绝佳的分隔截断点）
     amount_idx = -1
     for i, t in enumerate(texts):
         if (t.startswith("-") or t.startswith("+")) and re.match(r'^[-+][0-9.]+$', t):
             amount_idx = i
             break
 
-    # 2. 检查全局是否存在顶部干扰按钮（弹窗特殊版式标志）
     btn_found_idx = -1
     for i, t in enumerate(texts):
         if t in ["全部账单", "X", "x", "X全部账单", "x全部账单"]:
             btn_found_idx = i
             break
 
-    # 🔍 规则 A：如果有干扰按钮，且付款金额也存在，则拼接按钮与金额之间的所有换行内容
     if btn_found_idx != -1 and amount_idx != -1 and amount_idx > btn_found_idx:
         collected_official_texts = []
         collected_official_scores = []
         for idx in range(btn_found_idx + 1, amount_idx):
             next_t = texts[idx]
-            # 安全卡口：中途撞到核心控制词则提早刹车
             if next_t in KEYWORDS or any(k in next_t for k in KEYWORDS):
                 break
             collected_official_texts.append(next_t)
@@ -139,15 +142,12 @@ def clean_and_parse_ocr(img_name, img_list):
         if collected_official_texts:
             res_map["收款官方"] = ("".join(collected_official_texts), collected_official_scores[0])
 
-    # 🔍 规则 B：如果没有特殊的干扰按钮（常规版式），则只通过赋值付款金额的上一行
     elif amount_idx > 0:
         prev_idx = amount_idx - 1
         prev_txt = texts[prev_idx]
-        # 排除系统控制干扰，确保拿到真实人名/商户
         if prev_txt not in ["全部账单", "X", "x", "X全部账单", "x全部账单"] and not (prev_txt in KEYWORDS or any(k in prev_txt for k in KEYWORDS)):
             res_map["收款官方"] = (prev_txt, scores[prev_idx])
 
-    # 3. 完美承接并跑通原有的当前状态、支付时间、单号及商户解析流程
     for i, t in enumerate(texts):
         if i + 1 >= len(texts): continue
         next_val = texts[i+1]
@@ -170,7 +170,6 @@ def clean_and_parse_ocr(img_name, img_list):
         elif "商户单号" in t: 
             val, sc = get_sn_multiline_value(texts, scores, i + 1)
             res_map["商户单号"] = (val, sc)
-
 
     official_val, official_sc = res_map.get("收款官方", ("", 1.0))
     if "先用后付" in official_val: res_map["收款官方"] = ("先用后付", 1.0)
