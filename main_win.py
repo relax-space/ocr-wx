@@ -23,7 +23,7 @@ CRED_CONFIG_FILE = os.path.join(BASE_DIR, '.ocr_credentials_secret.json')
 class BillOcrGui:
     def __init__(self, window):
         self.window = window
-        self.window.title("⚡ 微信支付图片多账号智能轮询云对账系统 v2.0")
+        self.window.title("⚡ 微信支付图片多账号智能轮询云对账系统 v2.1")
         self.window.geometry("640x630")
         self.window.resizable(False, False)
         
@@ -104,37 +104,45 @@ class BillOcrGui:
                 self.txt_cred.insert("1.0", text_show.strip())
             except: pass
     def check_and_reset_monthly(self, accounts):
-        """跨月重置大脑：判断是否跨月或处于1号，恢复所有可用次数"""
+        """
+        🔒 绝对安全锁机制：
+        严格限制：只有当系统检测到【真正跨月】时，才允许对次数进行恢复！
+        无论是1号当天下午，还是当月的任何一天，只要上次消耗日期是【当月】，一律严禁重置！
+        """
         today = datetime.now()
-        is_first_day = (today.day == 1)
+        today_str = today.strftime("%Y-%m-%d")
         need_save = False
         
         for acc in accounts:
-            last_used_str = acc.get("last_used", "")
-            need_reset = False
+            # 如果账号本来就是有效的，直接跳过，绝不无脑刷新
+            if acc.get("status", "valid") == "valid":
+                continue
+                
+            last_used_str = acc.get("last_used", "").strip()
             
-            if is_first_day:
-                if last_used_str:
-                    try:
-                        last_date = datetime.strptime(last_used_str, "%Y-%m-%d")
-                        if last_date.day != 1 or last_date.month != today.month or last_date.year != today.year:
-                            need_reset = True
-                    except:
-                        need_reset = True
-                else:
-                    need_reset = True
-            else:
-                if last_used_str:
-                    try:
-                        last_date = datetime.strptime(last_used_str, "%Y-%m-%d")
-                        if last_date.month != today.month or last_date.year != today.year:
-                            need_reset = True
-                    except:
-                        need_reset = True
+            # 🛡️ 核心第一道防火墙：如果记录的上次使用日期就是今天，说明是刚刚用完的，绝对不重置！
+            if last_used_str == today_str:
+                continue
+                
+            # 🛡️ 核心第二道防火墙：解析上次用尽的年份和月份
+            if last_used_str:
+                try:
+                    last_date = datetime.strptime(last_used_str, "%Y-%m-%d")
+                    # 如果用尽的年份和当月完全一样，说明就是这个月用光的！绝对严禁重置！
+                    if last_date.year == today.year and last_date.month == today.month:
+                        continue
+                except:
+                    # 如果日期解析出异常，为了财务安全，也不予以重置
+                    continue
 
-            if need_reset and acc.get("status") == "exhausted":
+            # =====================================================================
+            # 🔓 只有漏网之鱼（记录的是上个月或更久以前的旧账），且当前状态是已耗尽，才允许恢复
+            # =====================================================================
+            if acc.get("status") == "exhausted":
                 acc["status"] = "valid"
+                acc["last_used"] = "" # 清空旧标记，进入新一轮生命周期
                 need_save = True
+                print(f"🔄 [安全跨月重置生效] 发现历史遗留耗尽账号，已成功恢复可用次数: {acc['secret_id']}")
                 
         if need_save:
             try:
@@ -142,6 +150,7 @@ class BillOcrGui:
                     json.dump(accounts, f, indent=4)
             except: pass
         return accounts
+
     def save_credentials(self):
         raw_text = self.txt_cred.get("1.0", tk.END).strip()
         if not raw_text:
