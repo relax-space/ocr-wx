@@ -6,7 +6,7 @@ import threading
 import asyncio
 import re
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, ttk
 import pandas as pd
 from datetime import datetime
 
@@ -20,6 +20,84 @@ else:
 
 PATH_CONFIG_FILE = os.path.join(BASE_DIR, '.ocr_path_config.txt')
 CRED_CONFIG_FILE = os.path.join(BASE_DIR, '.ocr_credentials_secret.json')
+class CustomDialog(tk.Toplevel):
+    """
+    ⚡ 全自定义高颜值 Tkinter 弹窗（集成文件夹失败高阶滚动列表与防闪烁黑科技）
+    """
+    def __init__(self, parent, title, message, mode="info", callback_action=None, btn_action_text=" 确 定 ", folder_list=None):
+        super().__init__(parent)
+        
+        # 🛡️ 核心防闪：立刻让窗口进入全隐身透明状态
+        self.attributes("-alpha", 0.0) 
+        
+        self.title(title)
+        self.configure(bg="#F3F3F3")
+        self.resizable(False, False)
+        
+        # 开启强制模态聚焦机制
+        self.transient(parent)
+        self.grab_set()
+
+        # 根据模式动态配置视觉主题颜色与高亮
+        theme_color = "#0078D4" if mode == "info" else "#D47A00" if mode == "warning" else "#E81123"
+        
+        # 📐 精密屏幕居中坐标推算
+        dialog_width, dialog_height = 480, 260 if not folder_list else 340 # 针对滚动列表动态长高窗口
+        
+        main_w = parent.winfo_width()
+        main_h = parent.winfo_height()
+        main_x = parent.winfo_x()
+        main_y = parent.winfo_y()
+        pos_x = main_x + (main_w - dialog_width) // 2
+        pos_y = main_y + (main_h - dialog_height) // 2
+        self.geometry(f"{dialog_width}x{dialog_height}+{pos_x}+{pos_y}")
+
+        # ✍️ 核心文字与组件渲染布局
+        main_frame = tk.Frame(self, bg="#F3F3F3", padx=25, pady=15)
+        main_frame.pack(fill="both", expand=True)
+
+        lbl_title = tk.Label(main_frame, text=title, font=("微软雅黑", 12, "bold"), fg=theme_color, bg="#F3F3F3")
+        lbl_title.pack(anchor="w", pady=(0, 6))
+
+        lbl_msg = tk.Label(main_frame, text=message, font=("微软雅黑", 10), justify="left", fg="#333333", bg="#F3F3F3", wraplength=430)
+        lbl_msg.pack(anchor="w", pady=(2, 6))
+        
+        # 📜 需求落地：如果传入了失败文件夹列表，则动态渲染一个现代化的带滚动条列表，绝不挤压按钮
+        if folder_list:
+            list_frame = tk.Frame(main_frame, bg="#F3F3F3")
+            list_frame.pack(fill="both", expand=True, pady=(2, 2))
+            
+            scrollbar = tk.Scrollbar(list_frame, orient=tk.VERTICAL)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            
+            # 使用固定高度和现代微软雅黑字体的 Listbox 锁死范围
+            box = tk.Listbox(list_frame, font=("微软雅黑", 9), fg="#555555", bg="white", 
+                             yscrollcommand=scrollbar.set, highlightthickness=1, highlightcolor="#CCCCCC", height=5)
+            box.pack(side=tk.LEFT, fill="both", expand=True)
+            scrollbar.config(command=box.yview)
+            
+            # 精确填入失败的每一个文件夹路径参数
+            for f_path in folder_list:
+                box.insert(tk.END, f" 📂 {f_path}")
+        
+        # 🔘 底部通用操作控制区域
+        btn_frame = tk.Frame(self, pady=12, bg="#F3F3F3")
+        btn_frame.pack(fill="x", side="bottom")
+
+        if callback_action:
+            btn_action = tk.Button(btn_frame, text=btn_action_text, font=("微软雅黑", 10, "bold"), bg="#107C41", fg="white", padx=15, pady=3,
+                                   command=lambda: [callback_action(), self.destroy()])
+            btn_action.pack(side="right", padx=(10, 25))
+            
+            btn_cancel = tk.Button(btn_frame, text=" 取 消 ", font=("微软雅黑", 10), bg="#E1E1E1", fg="#333333", padx=15, pady=3, command=self.destroy)
+            btn_cancel.pack(side="right")
+        else:
+            btn_close = tk.Button(btn_frame, text=" 关 闭 ", font=("微软雅黑", 10), bg=theme_color, fg="white", padx=20, pady=3, command=self.destroy)
+            btn_close.pack(side="right", padx=25)
+
+        # 🚀 现身时刻：解除透明锁，一键完美现身
+        self.attributes("-alpha", 1.0)
+        self.attributes("-topmost", True)
 class BillOcrGui:
     def __init__(self, window):
         self.window = window
@@ -27,7 +105,7 @@ class BillOcrGui:
         self.window.geometry("640x630")
         self.window.resizable(False, False)
         
-        # 1. 🔑 密钥配置面板 (支持直接复制多组)
+        # 1. 🔑 密钥配置面板
         frame_cred = tk.LabelFrame(window, text=" 🔐 企业微信 OCR 凭证批量配置 ", font=("微软雅黑", 9, "bold"), padx=10, pady=8)
         frame_cred.pack(fill="x", padx=25, pady=8)
         
@@ -94,7 +172,6 @@ class BillOcrGui:
             try:
                 with open(CRED_CONFIG_FILE, "r", encoding="utf-8") as f:
                     accounts = json.load(f)
-                # 检查并触发跨月自动重置次数
                 accounts = self.check_and_reset_monthly(accounts)
                 
                 text_show = ""
@@ -105,8 +182,8 @@ class BillOcrGui:
             except: pass
     def check_and_reset_monthly(self, accounts):
         """
-        🔒 绝对安全锁机制：
-        严格限制：只有当系统检测到【真正跨月】时，才允许对次数进行恢复！
+        🔒 绝对安全锁：
+        严格限制：只有检测到【真正跨月】时，才允许对次数进行恢复！
         无论是1号当天下午，还是当月的任何一天，只要上次消耗日期是【当月】，一律严禁重置！
         """
         today = datetime.now()
@@ -114,35 +191,26 @@ class BillOcrGui:
         need_save = False
         
         for acc in accounts:
-            # 如果账号本来就是有效的，直接跳过，绝不无脑刷新
             if acc.get("status", "valid") == "valid":
                 continue
                 
             last_used_str = acc.get("last_used", "").strip()
-            
-            # 🛡️ 核心第一道防火墙：如果记录的上次使用日期就是今天，说明是刚刚用完的，绝对不重置！
             if last_used_str == today_str:
                 continue
                 
-            # 🛡️ 核心第二道防火墙：解析上次用尽的年份和月份
             if last_used_str:
                 try:
                     last_date = datetime.strptime(last_used_str, "%Y-%m-%d")
-                    # 如果用尽的年份和当月完全一样，说明就是这个月用光的！绝对严禁重置！
                     if last_date.year == today.year and last_date.month == today.month:
                         continue
                 except:
-                    # 如果日期解析出异常，为了财务安全，也不予以重置
                     continue
 
-            # =====================================================================
-            # 🔓 只有漏网之鱼（记录的是上个月或更久以前的旧账），且当前状态是已耗尽，才允许恢复
-            # =====================================================================
             if acc.get("status") == "exhausted":
                 acc["status"] = "valid"
-                acc["last_used"] = "" # 清空旧标记，进入新一轮生命周期
+                acc["last_used"] = ""
                 need_save = True
-                print(f"🔄 [安全跨月重置生效] 发现历史遗留耗尽账号，已成功恢复可用次数: {acc['secret_id']}")
+                print(f"🔄 [自动跨月恢复] 账号 {acc['secret_id']} 已安全恢复可用次数。")
                 
         if need_save:
             try:
@@ -150,18 +218,17 @@ class BillOcrGui:
                     json.dump(accounts, f, indent=4)
             except: pass
         return accounts
-
     def save_credentials(self):
         raw_text = self.txt_cred.get("1.0", tk.END).strip()
         if not raw_text:
-            messagebox.showwarning("提示", "配置框不能为空！")
+            CustomDialog(self.window, "提示", "配置输入框内容不能为空！", "warning")
             return
             
         ids = re.findall(r'SecretId:\s*([^\s#\[\n]+)', raw_text)
         keys = re.findall(r'SecretKey:\s*([^\s#\n]+)', raw_text)
         
         if not ids or not keys or len(ids) != len(keys):
-            messagebox.showerror("错误", "文本解析失败，请确保成对输入 SecretId 与 SecretKey 行！")
+            CustomDialog(self.window, "解析失败", "文本格式解析失败，请确保成对输入 SecretId 与 SecretKey 行！", "error")
             return
             
         new_accounts = []
@@ -186,9 +253,10 @@ class BillOcrGui:
         try:
             with open(CRED_CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(new_accounts, f, indent=4)
-            messagebox.showinfo("成功", f"成功导入并保存 {len(new_accounts)} 个企业接口账号！")
+            CustomDialog(self.window, "保存成功", f"成功导入并保存 {len(new_accounts)} 个企业接口账号！", "info")
         except Exception as e:
-            messagebox.showerror("错误", f"保存配置文件失败: {e}")
+            CustomDialog(self.window, "保存失败", f"保存配置文件失败: {e}", "error")
+
     def start_async_thread(self):
         t = threading.Thread(target=self.run_async_loop_worker)
         t.daemon = True
@@ -199,7 +267,6 @@ class BillOcrGui:
         return f"{hrs:02d}:{mins:02d}:{secs:02d}"
 
     def get_active_account(self):
-        """精准提取当前未消耗完的主密钥账号"""
         if not os.path.exists(CRED_CONFIG_FILE): return None
         try:
             with open(CRED_CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -211,7 +278,6 @@ class BillOcrGui:
         except: pass
         return None
     def mark_account_exhausted(self, secret_id):
-        """独立、串行写入，避免任何并发脏数据污染"""
         if not os.path.exists(CRED_CONFIG_FILE): return
         try:
             with open(CRED_CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -225,10 +291,17 @@ class BillOcrGui:
         except: pass
 
     def run_async_loop_worker(self):
+        # ⏱️ 终极计时起跑线
+        global_start_time = time.time()
+        
         target_dir = os.path.normpath(self.entry_path.get().strip())
         if not target_dir or not os.path.exists(target_dir):
-            messagebox.showerror("错误", "文件夹路径无效！")
+            CustomDialog(self.window, "路径无效", "请选择有效的图片文件夹路径！", "error")
             return
+
+        self.btn_start.config(state=tk.DISABLED, bg="#CCCCCC")
+        self.label_status.config(text="⏳ 正在扫描清点本地文件夹路径...", fg="#D47A00")
+        self.window.update()
 
         supported_exts = ('.jpg', '.jpeg', '.png', '.JPG', '.JPEG', '.PNG')
         folder_to_images_map = {}
@@ -241,18 +314,17 @@ class BillOcrGui:
 
         total_images = len(all_images_flat)
         if total_images == 0:
-            messagebox.showwarning("提示", "未检测到任何账单图片！")
+            self.btn_start.config(state=tk.NORMAL, bg="#0078D4")
+            self.label_status.config(text="💡 状态: 准备就绪", fg="#333333")
+            CustomDialog(self.window, "未检测到图片", "所选文件夹及子目录下未检测到任何账单图片！", "warning")
             return
-        self.btn_start.config(state=tk.DISABLED, bg="#CCCCCC")
         self.progress_bar["maximum"] = total_images
         self.progress_bar["value"] = 0
         self.label_status.config(text="⏳ 动态序列轮询并发流控启动...", fg="#D47A00")
         
-        start_recognition_time = time.time()
         raw_outputs = []
         pending_images = all_images_flat.copy()
 
-        # 🚀 外部主大循环：只要还有未成功图片且存在健康账号，就一轮轮清洗
         while pending_images and self.get_active_account():
             acc = self.get_active_account()
             s_id, s_key = acc["secret_id"], acc["secret_key"]
@@ -260,17 +332,14 @@ class BillOcrGui:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             
-            # 1. 动态克隆映射当前轮次的异步并发流
             tasks_map = {}
             for img_path in pending_images:
                 coro = core_logic.async_ocr_request(img_path, s_id, s_key)
                 tasks_map[img_path] = loop.create_task(coro)
             
-            # 2. 并发安全等待当前账号名下的所有任务完整执行完毕，绝不中途退出
             loop.run_until_complete(asyncio.gather(*tasks_map.values(), return_exceptions=True))
             loop.close()
             
-            # 3. 在并发彻底终结后，有秩序地通过统一清点搜集所有不成功的图片参数
             failed_collected_images = []
             account_triggered_exhausted = False
             
@@ -278,42 +347,51 @@ class BillOcrGui:
                 exc = task.exception()
                 if exc:
                     failed_collected_images.append(img_path)
-                    # 判定是不是额度用光的信号
                     if isinstance(exc, ValueError) and str(exc) == "ACCOUNT_EXHAUSTED":
                         account_triggered_exhausted = True
                 else:
-                    # 识别圆满成功
                     ocr_res = task.result()
                     img_base_name, _ = os.path.splitext(os.path.basename(img_path))
                     raw_outputs.append((img_base_name, ocr_res))
+                    
+                    current_done_count = len(raw_outputs)
+                    self.progress_bar["value"] = current_done_count
+                    self.label_counter.config(text=f"已成功处理: {current_done_count} 张 / 剩余待定: {total_images - current_done_count} 张")
+                    self.window.update()
             
-            # 4. 彻底脱离并发，同步进行账号状态写入，仅修改发生错误的当前账号
             if account_triggered_exhausted:
                 self.mark_account_exhausted(s_id)
                 
-            # 5. 更新下一轮需要重试的队列
             pending_images = failed_collected_images
             
-            # 更新主界面大进度条
             self.progress_bar["value"] = len(raw_outputs)
             self.label_counter.config(text=f"已成功处理: {len(raw_outputs)} 张 / 剩余待定: {len(pending_images)} 张")
             self.window.update()
             
             if pending_images and self.get_active_account():
-                time.sleep(0.5)  # 换号时留出无感存盘与套接字冷却微秒
+                time.sleep(0.5)
 
-        hms_duration = self.convert_to_hms(time.time() - start_recognition_time)
         ocr_result_registry = {name: ocr for name, ocr in raw_outputs if ocr}
         
-        # 6. 唯有所有配置的账号都耗尽且 pend_images 不为空，才触发终极弹窗
+        # =====================================================================
+        # ✨ 滚动列表对接点：提取去重文件夹路径，塞入高阶 CustomDialog 的 folder_list 中
+        # =====================================================================
         if pending_images and not self.get_active_account():
             self.btn_start.config(state=tk.NORMAL, bg="#0078D4")
             self.label_status.config(text="❌ 错误：因所有账号额度耗尽，对账任务被迫中断。", fg="red")
-            messagebox.showerror("额度耗尽", f"所有配置的账号次数均已耗尽！\n未识别图片共计 {len(pending_images)} 张。\n请补充密钥或等待下月1号自动恢复。")
+            
+            failed_folders = sorted(list(set(os.path.dirname(p) for p in pending_images)))
+            error_message = f"所有配置的企业 OCR 账号额度均已耗尽！\n未识别图片总计: {len(pending_images)} 张。\n\n📍 产生失败图片所在的文件夹列表如下："
+            
+            # 发送参数给自定义弹窗，激活滚动条机制
+            CustomDialog(self.window, "账号额度全部耗尽", error_message, "error", folder_list=failed_folders)
             return 
             
-        self.save_to_excel_logic(folder_to_images_map, ocr_result_registry, hms_duration)
-    def save_to_excel_logic(self, folder_to_images_map, ocr_result_registry, hms_duration):
+        self.save_to_excel_logic(folder_to_images_map, ocr_result_registry, global_start_time)
+    def save_to_excel_logic(self, folder_to_images_map, ocr_result_registry, global_start_time):
+        self.label_status.config(text="⏳ 云端数据回传完毕，正在执行结构化深度对账与本地 Excel 存盘...", fg="#004B87")
+        self.window.update()
+
         columns_layout = [
             "图片名称", "采购日期", "置信度", "付款状态", "置信度", "收款官方", "置信度", "付款金额", "置信度", 
             "支付日期", "置信度", "支付时间", "置信度", "付款方式", "置信度", "交易单号", "置信度", "商户全称", 
@@ -355,48 +433,25 @@ class BillOcrGui:
             df_local = df_local.iloc[:, valid_col_indices]
             df_local.to_excel(local_output_path, index=False)
 
+        # ⏱️ 终极全生命周期计时闭合点
+        total_full_duration = time.time() - global_start_time
+        hms_duration = self.convert_to_hms(total_full_duration)
+
         self.btn_start.config(state=tk.NORMAL, bg="#0078D4")
-        self.label_status.config(text=f"✅ 完成！耗时: {hms_duration}", fg="green")
+        self.label_status.config(text=f"✅ 完成！总计真实全链耗时: {hms_duration}", fg="green")
         
         target_dir = os.path.normpath(self.entry_path.get().strip())
         sub_folder_name = os.path.basename(target_dir) or "账单"
         excel_name = f"{sub_folder_name}批量账单.xlsx"
 
-        dialog = tk.Toplevel(self.window)
-        dialog.title("🎉 对账任务完成")
-        dialog.configure(bg="#F3F3F3")
-        dialog.resizable(False, False)
-        dialog.transient(self.window)
-        dialog.grab_set()
-
-        dialog_width, dialog_height = 420, 200
-        self.window.update_idletasks()
-        main_w, main_h = self.window.winfo_width(), self.window.winfo_height()
-        main_x, main_y = self.window.winfo_x(), self.window.winfo_y()
-        pos_x = main_x + (main_w - dialog_width) // 2
-        pos_y = main_y + (main_h - dialog_height) // 2
-        dialog.geometry(f"{dialog_width}x{dialog_height}+{pos_x}+{pos_y}")
-
-        main_frame = tk.Frame(dialog, bg="#F3F3F3", padx=20, pady=20)
-        main_frame.pack(fill="both", expand=True)
-        tk.Label(main_frame, text="⚡ 云端对账全部结束！", font=("微软雅黑", 11, "bold"), fg="#0078D4", bg="#F3F3F3").grid(row=0, column=1, sticky="w")
-
-        msg_text = f"对账结果已成功保存并生成在当前图片文件夹：\n👉 {excel_name}\n⏱️ 总计耗时：{hms_duration}"
-        tk.Label(main_frame, text=msg_text, font=("微软雅黑", 10), justify="left", fg="#333333", bg="#F3F3F3").grid(row=1, column=1, sticky="w", pady=(8, 0))
-        
-        btn_frame = tk.Frame(dialog, pady=15, bg="#F3F3F3")
-        btn_frame.pack(fill="x", side="bottom")
-
-        def on_open_folder(path):
+        def on_open_folder():
             try:
-                if os.path.exists(path): os.startfile(path)
-            except Exception as e: messagebox.showerror("错误", f"无法打开文件夹: {e}")
+                if os.path.exists(target_dir): os.startfile(target_dir)
+            except Exception as e: CustomDialog(self.window, "打开失败", f"无法打开文件夹: {e}", "error")
 
-        btn_open = tk.Button(btn_frame, text="📂 打开文件夹", font=("微软雅黑", 10, "bold"), bg="#107C41", fg="white", padx=15, pady=3,
-                             command=lambda: [on_open_folder(target_dir), dialog.destroy()])
-        btn_open.pack(side="right", padx=(10, 20))
-        btn_cancel = tk.Button(btn_frame, text=" 关 闭 ", font=("微软雅黑", 10), bg="#E1E1E1", fg="#333333", padx=15, pady=3, command=dialog.destroy)
-        btn_cancel.pack(side="right")
+        # ✨ 净化修正：完美抹除了您不希望保留的括号长段长句，回归最纯粹的视觉。
+        msg_text = f"对账结果已成功保存并生成在当前图片文件夹：\n👉 {excel_name}\n⏱️ 总计真实全链耗时：{hms_duration}"
+        CustomDialog(self.window, "🎉 对账任务完成", msg_text, "info", callback_action=on_open_folder, btn_action_text="📂 打开文件夹")
 
 if __name__ == "__main__":
     root = tk.Tk()
