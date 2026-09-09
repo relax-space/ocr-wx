@@ -21,68 +21,93 @@ APP_SETTINGS_FILE = os.path.join(BASE_DIR, '.ocr_app_settings.json')
 CRED_CONFIG_FILE = os.path.join(BASE_DIR, '.ocr_credentials_secret.json')
 class CustomDialog(tk.Toplevel):
     """
-    ⚡ 全自定义高颜值 Tkinter 弹窗（紧凑空间版 - 完美修复左上角漂移 Bug）
+    ⚡ 全自定义高颜值 Tkinter 弹窗（双重异步渲染 - 彻底终结左上角漂移神仙版）
     """
     def __init__(self, parent, title, message, mode="info", callback_action=None, btn_action_text=" 确 定 ", folder_list=None):
         super().__init__(parent)
+        # 🎯 核心策略 1：开局直接锁死透明度为 0，并且隐藏外观，无论它去哪，用户都绝对看不见闪烁
         self.attributes("-alpha", 0.0) 
+        self.withdraw() 
+        
         self.title(title)
         self.configure(bg="#F3F3F3")
         self.resizable(False, False)
         self.transient(parent)
         self.grab_set()
 
-        theme_color = "#0078D4" if mode == "info" else "#D47A00" if mode == "warning" else "#E81123"
+        self.theme_color = "#0078D4" if mode == "info" else "#D47A00" if mode == "warning" else "#E81123"
+        self.dialog_width, self.dialog_height = 480, 260 if not folder_list else 360
         
-        # 窗口总高度缩回最舒适紧凑的 360，绝不无形长高
-        dialog_width, dialog_height = 480, 260 if not folder_list else 360
+        # 保存传入的参数供延迟渲染使用
+        self.parent = parent
+        self.callback_action = callback_action
+        self.btn_action_text = btn_action_text
+        self.folder_list = folder_list
+        self.message = message
+        self.title_text = title
+
+        # 🎯 核心策略 2：通过底层时钟中断，延迟 10 毫秒执行真实物理坐标计算
+        # 10毫秒足够操作系统把主窗口的真实绝对像素坐标更新完毕，彻底避开初始化迟滞
+        self.after(10, self._delayed_geometry_and_show)
+
+    def _delayed_geometry_and_show(self):
+        """
+        🎯 延迟执行体：在主窗口坐标完全锁死稳定后，精准空降居中并现身
+        """
+        if not self.winfo_exists(): return
         
-        # 🎯 核心修复 1：物理强制刷新父窗口的几何位置，防止在多线程结束瞬间取到旧数据或 0
-        parent.update_idletasks()
+        # 强制同步一次最新的视口
+        self.parent.update_idletasks()
         
-        main_w = parent.winfo_width()
-        main_h = parent.winfo_height()
-        main_x = parent.winfo_x()
-        main_y = parent.winfo_y()
+        main_w = self.parent.winfo_width()
+        main_h = self.parent.winfo_height()
+        main_x = self.parent.winfo_x()
+        main_y = self.parent.winfo_y()
         
-        # 🎯 核心修复 2：安全保底机制。如果取到的主窗体坐标不正常（例如小于等于0），自动降级切换为屏幕绝对居中
-        if main_x <= 0 or main_y <= 0:
+        # 极其严苛的物理界限判定：如果坐标小于等于10，或者高宽流产，直接视作漂移异常
+        if main_x <= 10 or main_y <= 10 or main_w <= 10 or main_h <= 10:
             screen_w = self.winfo_screenwidth()
             screen_h = self.winfo_screenheight()
-            pos_x = (screen_w - dialog_width) // 2
-            pos_y = (screen_h - dialog_height) // 2
+            pos_x = (screen_w - self.dialog_width) // 2
+            pos_y = (screen_h - self.dialog_height) // 2
         else:
-            # 正常情况下，基于主窗体完美相对居中
-            pos_x = main_x + (main_w - dialog_width) // 2
-            pos_y = main_y + (main_h - dialog_height) // 2
+            pos_x = main_x + (main_w - self.dialog_width) // 2
+            pos_y = main_y + (main_h - self.dialog_height) // 2
             
-        self.geometry(f"{dialog_width}x{dialog_height}+{pos_x}+{pos_y}")
+        self.geometry(f"{self.dialog_width}x{self.dialog_height}+{pos_x}+{pos_y}")
         
-        # 先用 side="bottom" 强行把动作大按钮焊死在底层，拒绝任何物理被顶掉 Bug
+        # 坐标对齐后，再开始组装 UI 组件，防止组件渲染挤压几何空间
+        self._build_ui_components()
+        
+        # 🚀 解除隐藏，平滑显现，完美贴合居中
+        self.deiconify()
+        self.attributes("-alpha", 1.0)
+        self.attributes("-topmost", True)
+
+    def _build_ui_components(self):
+        """组装内部UI组件"""
         btn_frame = tk.Frame(self, pady=10, bg="#F3F3F3")
         btn_frame.pack(fill="x", side="bottom")
 
-        if callback_action:
-            btn_action = tk.Button(btn_frame, text=btn_action_text, font=("微软雅黑", 10, "bold"), bg="#107C41", fg="white", padx=15, pady=3, command=lambda: [callback_action(), self.destroy()])
+        if self.callback_action:
+            btn_action = tk.Button(btn_frame, text=self.btn_action_text, font=("微软雅黑", 10, "bold"), bg="#107C41", fg="white", padx=15, pady=3, command=lambda: [self.callback_action(), self.destroy()])
             btn_action.pack(side="right", padx=(10, 25))
             btn_cancel = tk.Button(btn_frame, text=" 取 消 ", font=("微软雅黑", 10), bg="#E1E1E1", fg="#333333", padx=15, pady=3, command=self.destroy)
             btn_cancel.pack(side="right")
         else:
-            btn_close = tk.Button(btn_frame, text=" 关 闭 ", font=("微软雅黑", 10), bg=theme_color, fg="white", padx=20, pady=3, command=self.destroy)
+            btn_close = tk.Button(btn_frame, text=" 关 闭 ", font=("微软雅黑", 10), bg=self.theme_color, fg="white", padx=20, pady=3, command=self.destroy)
             btn_close.pack(side="right", padx=25)
             
-        # 再渲染中部的文本和列表内容
         main_frame = tk.Frame(self, bg="#F3F3F3", padx=25, pady=10)
         main_frame.pack(fill="both", expand=True)
 
-        lbl_title = tk.Label(main_frame, text=title, font=("微软雅黑", 12, "bold"), fg=theme_color, bg="#F3F3F3")
+        lbl_title = tk.Label(main_frame, text=self.title_text, font=("微软雅黑", 12, "bold"), fg=self.theme_color, bg="#F3F3F3")
         lbl_title.pack(anchor="w", pady=(0, 4))
 
-        lbl_msg = tk.Label(main_frame, text=message, font=("微软雅黑", 10), justify="left", fg="#333333", bg="#F3F3F3", wraplength=430)
+        lbl_msg = tk.Label(main_frame, text=self.message, font=("微软雅黑", 10), justify="left", fg="#333333", bg="#F3F3F3", wraplength=430)
         lbl_msg.pack(anchor="w", pady=(2, 4))
         
-        # 将 height 限制死为 4 行。多于 4 行时在内部优雅刷出滚动条，不挤压一丁点外部空间！
-        if folder_list:
+        if self.folder_list:
             list_frame = tk.Frame(main_frame, bg="#F3F3F3")
             list_frame.pack(fill="both", expand=True, pady=(2, 2))
             scrollbar = tk.Scrollbar(list_frame, orient=tk.VERTICAL)
@@ -90,12 +115,8 @@ class CustomDialog(tk.Toplevel):
             box = tk.Listbox(list_frame, font=("微软雅黑", 9), fg="#555555", bg="white", yscrollcommand=scrollbar.set, highlightthickness=1, highlightcolor="#CCCCCC", height=4)
             box.pack(side=tk.LEFT, fill="both", expand=True)
             scrollbar.config(command=box.yview)
-            for f_path in folder_list:
+            for f_path in self.folder_list:
                 box.insert(tk.END, f" 📄 {f_path}")
-        
-        # 🚀 解除透明锁完全现身
-        self.attributes("-alpha", 1.0)
-        self.attributes("-topmost", True)
 
 class BillOcrGui:
     def __init__(self, window):

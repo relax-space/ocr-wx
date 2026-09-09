@@ -220,3 +220,4 @@ __marimo__/
 .ocr_credentials_secret.json
 .ocr_path_config.txt
 .ocr_app_settings.json
+*.dist
