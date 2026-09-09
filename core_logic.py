@@ -64,10 +64,11 @@ async def async_ocr_request(image_path, secret_id, secret_key, action_name):
             loop = asyncio.get_event_loop()
             return await loop.run_in_executor(None, _sync_tencent_ocr, image_path, secret_id, secret_key, action_name)
         except TencentCloudSDKException as err:
+            # AuthFailure.SecretIdNotFound 用来测试账号资源使用完了，切换账号的情况
             exhausted_codes = [
                 "LimitExceeded", 
                 "ResourceInsufficient", 
-                "AuthFailure.SecretIdNotFound",
+                # "AuthFailure.SecretIdNotFound",
                 "ResourceUnavailable.ResourcePackageRunOut"
             ]
             if err.code in exhausted_codes or any(k in err.message for k in ["停机", "欠费", "次数", "耗尽", "余额不足"]):
