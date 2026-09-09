@@ -21,7 +21,7 @@ APP_SETTINGS_FILE = os.path.join(BASE_DIR, '.ocr_app_settings.json')
 CRED_CONFIG_FILE = os.path.join(BASE_DIR, '.ocr_credentials_secret.json')
 class CustomDialog(tk.Toplevel):
     """
-    ⚡ 全自定义高颜值 Tkinter 弹窗（紧凑空间版）
+    ⚡ 全自定义高颜值 Tkinter 弹窗（紧凑空间版 - 完美修复左上角漂移 Bug）
     """
     def __init__(self, parent, title, message, mode="info", callback_action=None, btn_action_text=" 确 定 ", folder_list=None):
         super().__init__(parent)
@@ -37,13 +37,27 @@ class CustomDialog(tk.Toplevel):
         # 窗口总高度缩回最舒适紧凑的 360，绝不无形长高
         dialog_width, dialog_height = 480, 260 if not folder_list else 360
         
+        # 🎯 核心修复 1：物理强制刷新父窗口的几何位置，防止在多线程结束瞬间取到旧数据或 0
+        parent.update_idletasks()
+        
         main_w = parent.winfo_width()
         main_h = parent.winfo_height()
         main_x = parent.winfo_x()
         main_y = parent.winfo_y()
-        pos_x = main_x + (main_w - dialog_width) // 2
-        pos_y = main_y + (main_h - dialog_height) // 2
+        
+        # 🎯 核心修复 2：安全保底机制。如果取到的主窗体坐标不正常（例如小于等于0），自动降级切换为屏幕绝对居中
+        if main_x <= 0 or main_y <= 0:
+            screen_w = self.winfo_screenwidth()
+            screen_h = self.winfo_screenheight()
+            pos_x = (screen_w - dialog_width) // 2
+            pos_y = (screen_h - dialog_height) // 2
+        else:
+            # 正常情况下，基于主窗体完美相对居中
+            pos_x = main_x + (main_w - dialog_width) // 2
+            pos_y = main_y + (main_h - dialog_height) // 2
+            
         self.geometry(f"{dialog_width}x{dialog_height}+{pos_x}+{pos_y}")
+        
         # 先用 side="bottom" 强行把动作大按钮焊死在底层，拒绝任何物理被顶掉 Bug
         btn_frame = tk.Frame(self, pady=10, bg="#F3F3F3")
         btn_frame.pack(fill="x", side="bottom")
@@ -56,6 +70,7 @@ class CustomDialog(tk.Toplevel):
         else:
             btn_close = tk.Button(btn_frame, text=" 关 闭 ", font=("微软雅黑", 10), bg=theme_color, fg="white", padx=20, pady=3, command=self.destroy)
             btn_close.pack(side="right", padx=25)
+            
         # 再渲染中部的文本和列表内容
         main_frame = tk.Frame(self, bg="#F3F3F3", padx=25, pady=10)
         main_frame.pack(fill="both", expand=True)
@@ -65,6 +80,7 @@ class CustomDialog(tk.Toplevel):
 
         lbl_msg = tk.Label(main_frame, text=message, font=("微软雅黑", 10), justify="left", fg="#333333", bg="#F3F3F3", wraplength=430)
         lbl_msg.pack(anchor="w", pady=(2, 4))
+        
         # 将 height 限制死为 4 行。多于 4 行时在内部优雅刷出滚动条，不挤压一丁点外部空间！
         if folder_list:
             list_frame = tk.Frame(main_frame, bg="#F3F3F3")
@@ -80,6 +96,7 @@ class CustomDialog(tk.Toplevel):
         # 🚀 解除透明锁完全现身
         self.attributes("-alpha", 1.0)
         self.attributes("-topmost", True)
+
 class BillOcrGui:
     def __init__(self, window):
         self.window = window
@@ -356,50 +373,57 @@ class BillOcrGui:
         last_account_id = None
         if not hasattr(self, 'dialog_is_showing'): self.dialog_is_showing = False
 
-        while pending_images and self.get_active_routing():
-            acc, active_engine = self.get_active_routing()
-            s_id, s_key = acc["secret_id"], acc["secret_key"]
-            current_acc_name = acc.get("account_name", "账号1")
-            
-            if last_account_id is not None and last_account_id != s_id:
-                self.label_eta.config(text=f"⚠️ 正在切换到{current_acc_name}... 请稍候", fg="#D47A00")
-                self.window.update()
+        # 创建长效事件循环
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        try:
+            while pending_images and self.get_active_routing():
+                acc, active_engine = self.get_active_routing()
+                s_id, s_key = acc["secret_id"], acc["secret_key"]
+                current_acc_name = acc.get("account_name", "账号1")
                 
-            last_account_id = s_id
-            mode_lbl = "高精度" if active_engine == "GeneralAccurateOCR" else "普通版"
-            self.label_eta.config(text=f"正在运转: {current_acc_name} 模式: {mode_lbl}", fg="#004B87")
-            self.window.update()
-            
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            tasks_map = {p: loop.create_task(core_logic.async_ocr_request(p, s_id, s_key, active_engine)) for p in pending_images}
-            loop.run_until_complete(asyncio.gather(*tasks_map.values(), return_exceptions=True))
-            loop.close()
-            
-            failed_collected_images = []
-            engine_triggered_exhausted = False
-            
-            for img_path, task in tasks_map.items():
-                exc = task.exception()
-                if exc:
-                    failed_collected_images.append(img_path)
-                    if isinstance(exc, ValueError) and str(exc) == "ENGINE_EXHAUSTED": engine_triggered_exhausted = True
-                else:
-                    raw_outputs.append((img_path, task.result()))
-                    self.progress_bar["value"] = len(raw_outputs)
-                    self.label_counter.config(text=f"已成功识别: {len(raw_outputs)} 张 / 剩余待定: {total_images - len(raw_outputs)} 张")
+                if last_account_id is not None and last_account_id != s_id:
+                    self.label_eta.config(text=f"⚠️ 正在切换到{current_acc_name}... 请稍候", fg="#D47A00")
                     self.window.update()
                     
-            if engine_triggered_exhausted: 
-                self.mark_engine_exhausted(s_id, active_engine)
-                self.window.after(0, lambda: [self.txt_cred.delete("1.0", tk.END), self.load_history_config()])
-            
-            if len(failed_collected_images) == len(pending_images) and not engine_triggered_exhausted:
-                print(f"⚠️ [提示] 发现 {len(failed_collected_images)} 张图片因网络波动或文件损坏无法解析，系统已自动登记错题本并平滑跳过...")
-                for bad_img in failed_collected_images: network_or_damaged_images.append(os.path.basename(bad_img))
-                failed_collected_images = []
+                last_account_id = s_id
+                mode_lbl = "高精度" if active_engine == "GeneralAccurateOCR" else "普通版"
+                self.label_eta.config(text=f"正在运转: {current_acc_name} 模式: {mode_lbl}", fg="#004B87")
+                self.window.update()
                 
-            pending_images = failed_collected_images
+                # 🎯 核心修正 1：构建带界面动态刷新的任务流
+                tasks = [
+                    self._wrap_ocr_task_with_ui_refresh(p, s_id, s_key, active_engine, raw_outputs, total_images)
+                    for p in pending_images
+                ]
+                
+                # 🎯 核心修正 2：直接 gather 它们。因为我们在内部包裹了实时刷新，gather 运行时界面也会跟着丝滑走动！
+                results = loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
+                
+                # 检查哪些图片失败了，用于轮询漏斗或错题本
+                failed_collected_images = []
+                engine_triggered_exhausted = False
+                
+                for idx, res in enumerate(results):
+                    img_path = pending_images[idx]
+                    if isinstance(res, Exception):
+                        failed_collected_images.append(img_path)
+                        if str(res) == "ENGINE_EXHAUSTED": 
+                            engine_triggered_exhausted = True
+                        
+                if engine_triggered_exhausted: 
+                    self.mark_engine_exhausted(s_id, active_engine)
+                    self.window.after(0, lambda: [self.txt_cred.delete("1.0", tk.END), self.load_history_config()])
+                
+                if len(failed_collected_images) == len(pending_images) and not engine_triggered_exhausted:
+                    print(f"⚠️ [提示] 发现 {len(failed_collected_images)} 张图片因网络波动或文件损坏无法解析，系统已自动登记错题本并平滑跳过...")
+                    for bad_img in failed_collected_images: network_or_damaged_images.append(os.path.basename(bad_img))
+                    failed_collected_images = []
+                    
+                pending_images = failed_collected_images
+        finally:
+            loop.close()
 
         ocr_result_registry = {str(name): ocr for name, ocr in raw_outputs if ocr}
         if network_or_damaged_images:
@@ -420,6 +444,27 @@ class BillOcrGui:
                 CustomDialog(self.window, "额度全部耗尽", f"全引擎额度均已耗尽！", "error", callback_action=reset_lock_callback, folder_list=sorted(list(set(os.path.dirname(p) for p in pending_images))))
             return 
         self.save_to_excel_logic(folder_to_images_map, ocr_result_registry, global_start_time, network_or_damaged_images)
+
+
+    async def _wrap_ocr_task_with_ui_refresh(self, img_path, secret_id, secret_key, action_name, raw_outputs, total_images):
+        """
+        🎯 新增核心包装方法：直接监听底层核心函数的返回，100% 确保拿到数据并安全塞入 Excel 队列，同时高频刷新 UI
+        """
+        try:
+            # 严格调用您的 core_logic 底层网络请求
+            res = await core_logic.async_ocr_request(img_path, secret_id, secret_key, action_name)
+            if res:
+                raw_outputs.append((img_path, res))
+            return res
+        except Exception as e:
+            # 向上抛出异常，让外层的逻辑去判断是否是 ENGINE_EXHAUSTED 以便切账号
+            raise e
+        finally:
+            # 无论成功还是失败，只要有一张图有了结果，立刻物理刷新 Tkinter 界面
+            current_done = len(raw_outputs)
+            self.progress_bar["value"] = current_done
+            self.label_counter.config(text=f"已成功识别: {current_done} 张 / 剩余待定: {total_images - current_done} 张")
+            self.window.update()
 
     def save_to_excel_logic(self, folder_to_images_map, ocr_result_registry, global_start_time, network_or_damaged_images=None):
         self.label_status.config(text="⏳ 正在执行结构化深度对账与本地 Excel 存盘...", fg="#004B87")

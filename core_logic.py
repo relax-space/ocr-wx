@@ -92,8 +92,7 @@ def _sync_tencent_ocr(image_path, secret_id, secret_key, action_name):
     
     if action_name == "GeneralAccurateOCR":
         req = models.GeneralAccurateOCRRequest()
-        params = {"ImageBase64": image_base64, "ConfigID": "OCR", "WordsType": "2"}
-        req.from_json_string(json.dumps(params))
+        req.ImageBase64 = image_base64
         resp = client.GeneralAccurateOCR(req)
     else:
         req = models.GeneralBasicOCRRequest()
