@@ -1,0 +1,12 @@
+[
+  {
+    "chinese_name": "通用文字识别",
+    "action_name": "GeneralBasicOCR",
+    "qps_limit": 10
+  },
+  {
+    "chinese_name": "通用文字识别（高精度版）",
+    "action_name": "GeneralAccurateOCR",
+    "qps_limit": 10
+  }
+]

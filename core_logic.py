@@ -14,7 +14,7 @@ from tencentcloud.common.exception.tencent_cloud_sdk_exception import TencentClo
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
-# 初始化限流信号量：严防死守 10 QPS，设置为 8 预留安全缓冲
+# 初始化限流信号量：由于普通版和高精度版各占配额，采用保守缓冲，单引擎并发建议设为 8
 qps_semaphore = asyncio.Semaphore(8)
 
 KEYWORDS = ["当前状态", "付款状态", "转账说明", "当前状态", "支付时间", "转账时间", "收款时间", "支付方式", "交易单号", "转账单号", "商户全称", "商户单号", "收单机构", "商品", "账单服务"]
@@ -51,16 +51,15 @@ def get_sn_multiline_value(texts, scores, start_idx):
             break
     return collected_text, final_score
 
-async def async_ocr_request(image_path, secret_id, secret_key):
+async def async_ocr_request(image_path, secret_id, secret_key, action_name):
     """
-    异步并发 OCR 核心，带严格 QPS 限流控制
+    异步并发 OCR 核心，支持传入特定的 Action 引擎名称进行物理路由
     """
     async with qps_semaphore:  
         try:
             loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(None, _sync_tencent_ocr, image_path, secret_id, secret_key)
+            return await loop.run_in_executor(None, _sync_tencent_ocr, image_path, secret_id, secret_key, action_name)
         except TencentCloudSDKException as err:
-            # AuthFailure.SecretIdNotFound 这个异常是做测试用的，实际上应该是：ResourceUnavailable.ResourcePackageRunOut
             exhausted_codes = [
                 "LimitExceeded", 
                 "ResourceInsufficient", 
@@ -68,13 +67,24 @@ async def async_ocr_request(image_path, secret_id, secret_key):
                 "ResourceUnavailable.ResourcePackageRunOut"
             ]
             if err.code in exhausted_codes or any(k in err.message for k in ["停机", "欠费", "次数", "耗尽", "余额不足"]):
-                raise ValueError("ACCOUNT_EXHAUSTED")
+                raise ValueError("ENGINE_EXHAUSTED")
             raise err
         except Exception as e:
             raise e
 
-def _sync_tencent_ocr(image_path, secret_id, secret_key):
-    """底层被包装的腾讯云物理调用"""
+def _sync_tencent_ocr(image_path, secret_id, secret_key, action_name):
+
+    # # ================== 🔬 【注入故障测试代码】 ==================
+    # if action_name == "GeneralBasicOCR":
+    #     print(f"⚠️ [测试桩拦截] 正在故意让账号 {secret_id[:6]}... 的【普通版】抛出额度耗尽异常...")
+    #     # 模拟腾讯云官方的“资源包用尽”错误码与提示消息
+    #     raise TencentCloudSDKException(
+    #         code="ResourceUnavailable.ResourcePackageRunOut", 
+    #         message="您的免费额度或购买的资源包次数已耗尽，请及时续费停机。"
+    #     )
+    # # ==========================================================
+
+    """底层被包装的腾讯云物理调用，依据 action_name 路由请求类与执行器"""
     with open(image_path, "rb") as f:
         image_base64 = base64.b64encode(f.read()).decode('utf-8')
         
@@ -85,9 +95,15 @@ def _sync_tencent_ocr(image_path, secret_id, secret_key):
     clientProfile.httpProfile = httpProfile
     client = ocr_client.OcrClient(cred, "", clientProfile)
     
-    req = models.GeneralBasicOCRRequest()
-    req.ImageBase64 = image_base64
-    resp = client.GeneralBasicOCR(req)
+    # 动态构建并路由请求
+    if action_name == "GeneralAccurateOCR":
+        req = models.GeneralAccurateOCRRequest()
+        req.ImageBase64 = image_base64
+        resp = client.GeneralAccurateOCR(req)
+    else:
+        req = models.GeneralBasicOCRRequest()
+        req.ImageBase64 = image_base64
+        resp = client.GeneralBasicOCR(req)
     
     response_json = json.loads(resp.to_json_string())
     image_results = []
@@ -100,7 +116,7 @@ def _sync_tencent_ocr(image_path, secret_id, secret_key):
     return image_results
 
 def clean_and_parse_ocr(img_name, img_list):
-    """深度解析逻辑"""
+    """深度结构化清洗逻辑"""
     texts = []
     scores = []
     for item in img_list:
